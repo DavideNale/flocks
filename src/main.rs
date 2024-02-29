@@ -9,6 +9,29 @@ struct Boid {
     y: f32,
 }
 
+fn update_boids(boids: &mut Vec<Boid>, dt: f32) {
+    for i in 0..boids.len() {
+        let protected: f32 = 50.0;
+        let mut close_dx: f32 = 0.0;
+        let mut close_dy: f32 = 0.0;
+
+        let x = boids[i].x;
+        let y = boids[i].y;
+
+        for other_boid in &mut *boids {
+            let distance2 = (other_boid.x - x).powi(2) + (other_boid.y - y).powi(2);
+
+            if distance2 != 0.0 && distance2 <= protected.powi(2) {
+                close_dx += other_boid.x;
+                close_dy += other_boid.y;
+            }
+        }
+
+        boids[i].x -= close_dx * dt;
+        boids[i].y -= close_dy * dt;
+    }
+}
+
 struct Model {
     boids: Vec<Boid>,
     num_boids: usize,
@@ -44,7 +67,9 @@ fn generate_boids_grid(num_boids: usize, _rect: Rect) -> Vec<Boid> {
     boids
 }
 
-fn update(_app: &App, _model: &mut Model, _update: Update) {}
+fn update(_app: &App, model: &mut Model, update: Update) {
+    update_boids(&mut model.boids, update.since_last.as_secs_f32());
+}
 
 fn view(app: &App, model: &Model, frame: Frame) {
     let draw = app.draw();
