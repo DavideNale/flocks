@@ -1,6 +1,4 @@
-use std::f64::MANTISSA_DIGITS;
-
-use nannou::{prelude::*, text::cursor::closest_cursor_index_and_xy};
+use nannou::prelude::*;
 
 fn main() {
     nannou::app(model).update(update).run();
@@ -14,14 +12,14 @@ struct Boid {
 }
 
 fn update_boids(boids: &mut Vec<Boid>, dt: f32) {
-    let turn_factor: f32 = 0.2;
+    let turn_factor: f32 = 10.0;
     let visual_range: f32 = 100.0;
     let protected_range: f32 = 15.0;
     let centering_factor: f32 = 0.005;
-    let avoid_factor: f32 = 0.05;
+    let avoid_factor: f32 = 1.0;
     let matching_factor: f32 = 0.05;
-    let speed_max: f32 = 6.0;
-    let speed_min: f32 = 3.0;
+    let speed_max: f32 = 200.0;
+    let speed_min: f32 = 50.0;
 
     for i in 0..boids.len() {
         // Save i-th boid's transform
@@ -89,7 +87,32 @@ fn update_boids(boids: &mut Vec<Boid>, dt: f32) {
         vx += close_dx * avoid_factor;
         vy += close_dy * avoid_factor;
 
-        // println!("{} {}", vx, vy);;
+        // Edge avoidance
+        if y > 250.0 {
+            vy -= turn_factor;
+        }
+        if y < -250.0 {
+            vy += turn_factor;
+        }
+        if x > 250.0 {
+            vx -= turn_factor;
+        }
+        if x < -250.0 {
+            vx += turn_factor;
+        }
+
+        // Speed adjustment
+        let speed = (vx * vx + vy * vy).sqrt();
+        if speed < speed_min {
+            vx = (vx / speed) * speed_min;
+            vy = (vy / speed) * speed_min;
+        }
+        if speed > speed_max {
+            vx = (vx / speed) * speed_max;
+            vy = (vy / speed) * speed_max;
+        }
+
+        // println!("{} {}", vx, vy);
         boids[i].vx = vx;
         boids[i].vy = vy;
 
@@ -110,7 +133,7 @@ fn model(app: &App) -> Model {
         .build()
         .unwrap();
 
-    let num_boids = 100;
+    let num_boids = 1000;
     let boids = generate_boids_grid(num_boids, app.window_rect());
 
     Model { boids, num_boids }
@@ -137,13 +160,20 @@ fn generate_boids_grid(num_boids: usize, _rect: Rect) -> Vec<Boid> {
 }
 
 fn update(_app: &App, model: &mut Model, update: Update) {
-    // println!("{}", update.since_last.as_secs_f32());
+    println!("{}", 1.0 / update.since_last.as_secs_f32());
     update_boids(&mut model.boids, update.since_last.as_secs_f32());
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
     let draw = app.draw();
     draw.background().color(WHITE);
+
+    draw.rect()
+        .w(500.0)
+        .h(500.0)
+        .no_fill()
+        .stroke_weight(5.0)
+        .stroke(LIGHTGRAY);
 
     model.boids.iter().for_each(|b| {
         draw.ellipse().x_y(b.x, b.y).radius(2.0).color(BLACK);
