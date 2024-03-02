@@ -1,4 +1,9 @@
 use nannou::prelude::*;
+use nannou_egui::{
+    self,
+    egui::{self, epaint::Shadow, Rounding},
+    Egui,
+};
 
 fn main() {
     nannou::app(model).update(update).run();
@@ -12,7 +17,7 @@ struct Boid {
 }
 
 fn update_boids(boids: &mut Vec<Boid>, dt: f32) {
-    let turn_factor: f32 = 10.0;
+    let turn_factor: f32 = 5.0;
     let visual_range: f32 = 100.0;
     let protected_range: f32 = 15.0;
     let centering_factor: f32 = 0.005;
@@ -124,19 +129,30 @@ fn update_boids(boids: &mut Vec<Boid>, dt: f32) {
 struct Model {
     boids: Vec<Boid>,
     num_boids: usize,
+    egui: Egui,
 }
 
 fn model(app: &App) -> Model {
-    app.new_window()
+    let id = app
+        .new_window()
         .size(1000, 1000)
         .view(view)
+        .raw_event(raw_window_event)
         .build()
         .unwrap();
 
-    let num_boids = 1000;
+    let window = app.window(id).unwrap();
+
+    let egui = Egui::from_window(&window);
+
+    let num_boids = 500;
     let boids = generate_boids_grid(num_boids, app.window_rect());
 
-    Model { boids, num_boids }
+    Model {
+        boids,
+        num_boids,
+        egui,
+    }
 }
 
 fn generate_boids_grid(num_boids: usize, _rect: Rect) -> Vec<Boid> {
@@ -160,7 +176,37 @@ fn generate_boids_grid(num_boids: usize, _rect: Rect) -> Vec<Boid> {
 }
 
 fn update(_app: &App, model: &mut Model, update: Update) {
-    println!("{}", 1.0 / update.since_last.as_secs_f32());
+    // let egui = &mut model.egui;
+    // egui.set_elapsed_time(update.since_start);
+    // let ctx = egui.begin_frame();
+
+    // egui::Window::new("Settings").show(&ctx, |ui| {
+    //     ui.add(egui::Label::new("Test"));
+    // });
+    let egui = &mut model.egui;
+    egui.set_elapsed_time(update.since_start);
+    let ctx = egui.begin_frame();
+    ctx.style_mut(|style| {
+        style.visuals.window_shadow = Shadow::NONE;
+        style.visuals.window_rounding = Rounding::ZERO;
+    });
+
+    egui::Window::new("Settings").show(&ctx, |ui| {
+        ui.label("Boids");
+        ui.add(egui::Slider::new(&mut model.num_boids, 1..=1000));
+
+        // // Scale slider
+        // ui.label("Scale:");
+        // ui.add(egui::Slider::new(&mut settings.scale, 0.0..=1000.0));
+
+        // // Rotation slider
+        // ui.label("Rotation:");
+        // ui.add(egui::Slider::new(&mut settings.rotation, 0.0..=360.0));
+    });
+
+    // println!("{}", 1.0 / update.since_last.as_secs_f32());
+
+    // Update boids
     update_boids(&mut model.boids, update.since_last.as_secs_f32());
 }
 
@@ -180,4 +226,18 @@ fn view(app: &App, model: &Model, frame: Frame) {
     });
 
     draw.to_frame(app, &frame).unwrap();
+
+    model.egui.draw_to_frame(&frame).unwrap();
+    // if app.keys.down.contains(&Key::Space) {
+    //     let file_path = app
+    //         .project_path()
+    //         .expect("failed to locate project directory")
+    //         .join("frames")
+    //         .join(format!("{:0}.png", app.elapsed_frames()));
+    //     app.main_window().capture_frame(file_path);
+    // }
+}
+
+fn raw_window_event(_app: &App, model: &mut Model, event: &nannou::winit::event::WindowEvent) {
+    model.egui.handle_raw_event(event);
 }
