@@ -1,14 +1,22 @@
 use nannou::prelude::*;
-use nannou_egui::{
-    self,
-    egui::{self, epaint::Shadow, Rounding},
-    Egui,
-};
+use nannou::wgpu;
 
-fn main() {
-    nannou::app(model).update(update).run();
+struct Model {
+    compute: Compute,
+    boids: Vec<Boid>,
+    // num_boids: usize,
+    // egui: Egui,
 }
 
+struct Compute {
+    boids_buffer: wgpu::Buffer,
+    buffer_size: wgpu::BufferAddress,
+    bind_group: wgpu::BindGroup,
+    pipeline: wgpu::ComputePipeline,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 struct Boid {
     x: f32,
     y: f32,
@@ -16,12 +24,83 @@ struct Boid {
     vy: f32,
 }
 
+fn main() {
+    nannou::app(model).update(update).run();
+}
+
+const NUM_BOIDS: usize = 1000;
+
+fn model(app: &App) -> Model {
+    let w_id = app
+        .new_window()
+        .size(1000, 1000)
+        .view(view)
+        // .raw_event(raw_window_event)
+        .build()
+        .unwrap();
+
+    // wgpu logical device
+    let binding = app.window(w_id).unwrap();
+    let device = binding.device();
+
+    // Create the compute shader module
+    let cs_module = device.create_shader_module(wgpu::include_wgsl!("shaders/compute.wgsl"));
+
+    // Generate grid of boids
+    let boids = generate_boids_grid(NUM_BOIDS, app.window_rect());
+
+    // Create the buffer that will store the result of our compute operation.
+    let buffer_size = (NUM_BOIDS * 2 as usize * std::mem::size_of::<f32>()) as wgpu::BufferAddress;
+    let boids_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Compute"),
+        size: buffer_size,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+
+    let bind_group_layout = wgpu::BindGroupLayoutBuilder::new()
+        .storage_buffer(wgpu::ShaderStages::COMPUTE, false, false)
+        .build(device);
+
+    let bind_group = wgpu::BindGroupBuilder::new()
+        .buffer_bytes(
+            &boids_buffer,
+            0,
+            Some(std::num::NonZeroU64::new(buffer_size).unwrap()),
+        )
+        .build(device, &bind_group_layout);
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("nannou"),
+        bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("nannou"),
+        layout: Some(&pipeline_layout),
+        module: &cs_module,
+        entry_point: "main",
+    });
+
+    let compute = Compute {
+        boids_buffer,
+        bind_group,
+        pipeline,
+        buffer_size,
+    };
+
+    Model { compute, boids }
+}
+
 fn update_boids(boids: &mut Vec<Boid>, dt: f32) {
-    let turn_factor: f32 = 5.0;
+    let turn_factor: f32 = 50.0;
     let visual_range: f32 = 100.0;
     let protected_range: f32 = 15.0;
-    let centering_factor: f32 = 0.005;
-    let avoid_factor: f32 = 1.0;
+    let centering_factor: f32 = 0.01;
+    let avoid_factor: f32 = 0.05;
     let matching_factor: f32 = 0.05;
     let speed_max: f32 = 200.0;
     let speed_min: f32 = 50.0;
@@ -126,35 +205,6 @@ fn update_boids(boids: &mut Vec<Boid>, dt: f32) {
     }
 }
 
-struct Model {
-    boids: Vec<Boid>,
-    num_boids: usize,
-    egui: Egui,
-}
-
-fn model(app: &App) -> Model {
-    let id = app
-        .new_window()
-        .size(1000, 1000)
-        .view(view)
-        .raw_event(raw_window_event)
-        .build()
-        .unwrap();
-
-    let window = app.window(id).unwrap();
-
-    let egui = Egui::from_window(&window);
-
-    let num_boids = 500;
-    let boids = generate_boids_grid(num_boids, app.window_rect());
-
-    Model {
-        boids,
-        num_boids,
-        egui,
-    }
-}
-
 fn generate_boids_grid(num_boids: usize, _rect: Rect) -> Vec<Boid> {
     // let w = rect.w();
     // let h = rect.h();
@@ -175,39 +225,63 @@ fn generate_boids_grid(num_boids: usize, _rect: Rect) -> Vec<Boid> {
     boids
 }
 
-fn update(_app: &App, model: &mut Model, update: Update) {
-    // let egui = &mut model.egui;
-    // egui.set_elapsed_time(update.since_start);
-    // let ctx = egui.begin_frame();
+fn update(app: &App, model: &mut Model, update: Update) {
+    // update_boids(&mut model.boids, update.since_last.as_secs_f32());
 
-    // egui::Window::new("Settings").show(&ctx, |ui| {
-    //     ui.add(egui::Label::new("Test"));
-    // });
-    let egui = &mut model.egui;
-    egui.set_elapsed_time(update.since_start);
-    let ctx = egui.begin_frame();
-    ctx.style_mut(|style| {
-        style.visuals.window_shadow = Shadow::NONE;
-        style.visuals.window_rounding = Rounding::ZERO;
+    let window = app.main_window();
+    let device = window.device();
+    let compute = &mut model.compute;
+
+    // The buffer to read the compute result
+    let read_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("read-boids"),
+        size: compute.buffer_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     });
 
-    egui::Window::new("Settings").show(&ctx, |ui| {
-        ui.label("Boids");
-        ui.add(egui::Slider::new(&mut model.num_boids, 1..=1000));
+    // The compute pass
+    let desc = wgpu::CommandEncoderDescriptor {
+        label: Some("desc-compute"),
+    };
+    let mut encoder = device.create_command_encoder(&desc);
+    {
+        let pass_desc = wgpu::ComputePassDescriptor {
+            label: Some("boids-compute_pass"),
+        };
+        let mut cpass = encoder.begin_compute_pass(&pass_desc);
+        cpass.set_pipeline(&compute.pipeline);
+        cpass.set_bind_group(0, &compute.bind_group, &[]);
+        cpass.dispatch_workgroups(1000 as u32, 1, 1);
+    }
+    encoder.copy_buffer_to_buffer(
+        &compute.boids_buffer,
+        0,
+        &read_buffer,
+        0,
+        compute.buffer_size,
+    );
 
-        // // Scale slider
-        // ui.label("Scale:");
-        // ui.add(egui::Slider::new(&mut settings.scale, 0.0..=1000.0));
+    // Submit the compute pass to the device's queue.
+    window.queue().submit(Some(encoder.finish()));
 
-        // // Rotation slider
-        // ui.label("Rotation:");
-        // ui.add(egui::Slider::new(&mut settings.rotation, 0.0..=360.0));
-    });
-
-    // println!("{}", 1.0 / update.since_last.as_secs_f32());
-
-    // Update boids
-    update_boids(&mut model.boids, update.since_last.as_secs_f32());
+    // Spawn a future that reads the result of the compute pass.
+    let future = async move {
+        let slice = read_buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        slice.map_async(wgpu::MapMode::Read, |res| {
+            tx.send(res).expect("The channel was closed");
+        });
+        if let Ok(_) = rx.await {
+            let bytes = &slice.get_mapped_range()[..];
+            let boids = {
+                // let len = bytes.len() / std::mem::size_of::<f32>();
+                // let ptr = bytes.as_ptr() as *const f32;
+                // unsafe { std::slice::from_raw_parts(ptr, len) }
+            };
+        }
+    };
+    pollster::block_on(future)
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
@@ -226,18 +300,4 @@ fn view(app: &App, model: &Model, frame: Frame) {
     });
 
     draw.to_frame(app, &frame).unwrap();
-
-    model.egui.draw_to_frame(&frame).unwrap();
-    // if app.keys.down.contains(&Key::Space) {
-    //     let file_path = app
-    //         .project_path()
-    //         .expect("failed to locate project directory")
-    //         .join("frames")
-    //         .join(format!("{:0}.png", app.elapsed_frames()));
-    //     app.main_window().capture_frame(file_path);
-    // }
-}
-
-fn raw_window_event(_app: &App, model: &mut Model, event: &nannou::winit::event::WindowEvent) {
-    model.egui.handle_raw_event(event);
 }
