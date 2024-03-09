@@ -2,17 +2,22 @@ use nannou::prelude::*;
 use nannou::wgpu;
 
 struct Model {
+    render: Render,
     compute: Compute,
     boids: Vec<Boid>,
-    // num_boids: usize,
-    // egui: Egui,
 }
 
 struct Compute {
     boids_buffer: wgpu::Buffer,
     buffer_size: wgpu::BufferAddress,
     bind_group: wgpu::BindGroup,
-    pipeline: wgpu::ComputePipeline,
+    compute_pipeline: wgpu::ComputePipeline,
+}
+
+struct Render {
+    bind_group: wgpu::BindGroup,
+    render_pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
 }
 
 #[repr(C)]
@@ -22,6 +27,12 @@ struct Boid {
     y: f32,
     vx: f32,
     vy: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Vertex {
+    position: [f32; 2],
 }
 
 fn main() {
@@ -78,7 +89,7 @@ fn model(app: &App) -> Model {
         push_constant_ranges: &[],
     });
 
-    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("nannou"),
         layout: Some(&pipeline_layout),
         module: &cs_module,
@@ -88,11 +99,46 @@ fn model(app: &App) -> Model {
     let compute = Compute {
         boids_buffer,
         bind_group,
-        pipeline,
+        compute_pipeline,
         buffer_size,
     };
 
-    Model { compute, boids }
+    // RENDER PIPELINE
+
+    let rn_module = device.create_shader_module(wgpu::include_wgsl!("shaders/render.wgsl"));
+
+    let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Vertex buffer"),
+        size: (2 * NUM_BOIDS * std::mem::size_of::<f32>()) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let bind_group_layout = wgpu::BindGroupLayoutBuilder::new().build(device);
+    let bind_group = wgpu::BindGroupBuilder::new().build(device, &bind_group_layout);
+    let pipeline_layout = wgpu::create_pipeline_layout(device, None, &[&bind_group_layout], &[]);
+
+    let render_pipeline = wgpu::RenderPipelineBuilder::from_layout(&pipeline_layout, &rn_module)
+        .fragment_shader(&rn_module)
+        .vertex_entry_point("vs_main")
+        .fragment_entry_point("fs_main")
+        .color_format(Frame::TEXTURE_FORMAT)
+        .add_vertex_buffer::<Vertex>(&wgpu::vertex_attr_array![0 => Float32x2])
+        .sample_count(binding.msaa_samples())
+        .primitive_topology(wgpu::PrimitiveTopology::PointList)
+        .build(device);
+
+    let render = Render {
+        bind_group,
+        render_pipeline,
+        vertex_buffer,
+    };
+
+    Model {
+        render,
+        compute,
+        boids,
+    }
 }
 
 fn update_boids(boids: &mut Vec<Boid>, dt: f32) {
@@ -225,79 +271,108 @@ fn generate_boids_grid(num_boids: usize, _rect: Rect) -> Vec<Boid> {
     boids
 }
 
-fn update(app: &App, model: &mut Model, update: Update) {
-    // update_boids(&mut model.boids, update.since_last.as_secs_f32());
+fn update(_app: &App, model: &mut Model, update: Update) {
+    update_boids(&mut model.boids, update.since_last.as_secs_f32());
 
-    let window = app.main_window();
-    let device = window.device();
-    let compute = &mut model.compute;
+    // let window = app.main_window();
+    // let device = window.device();
+    // let compute = &mut model.compute;
 
-    // The buffer to read the compute result
-    let read_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("read-boids"),
-        size: compute.buffer_size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    // // The buffer to read the compute result
+    // let read_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+    //     label: Some("read-boids"),
+    //     size: compute.buffer_size,
+    //     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+    //     mapped_at_creation: false,
+    // });
 
-    // The compute pass
-    let desc = wgpu::CommandEncoderDescriptor {
-        label: Some("desc-compute"),
-    };
-    let mut encoder = device.create_command_encoder(&desc);
-    {
-        let pass_desc = wgpu::ComputePassDescriptor {
-            label: Some("boids-compute_pass"),
-        };
-        let mut cpass = encoder.begin_compute_pass(&pass_desc);
-        cpass.set_pipeline(&compute.pipeline);
-        cpass.set_bind_group(0, &compute.bind_group, &[]);
-        cpass.dispatch_workgroups(1000 as u32, 1, 1);
-    }
-    encoder.copy_buffer_to_buffer(
-        &compute.boids_buffer,
-        0,
-        &read_buffer,
-        0,
-        compute.buffer_size,
-    );
+    // // The compute pass
+    // let desc = wgpu::CommandEncoderDescriptor {
+    //     label: Some("desc-compute"),
+    // };
+    // let mut encoder = device.create_command_encoder(&desc);
+    // {
+    //     let pass_desc = wgpu::ComputePassDescriptor {
+    //         label: Some("boids-compute_pass"),
+    //     };
+    //     let mut cpass = encoder.begin_compute_pass(&pass_desc);
+    //     cpass.set_pipeline(&compute.pipeline);
+    //     cpass.set_bind_group(0, &compute.bind_group, &[]);
+    //     cpass.dispatch_workgroups(1000 as u32, 1, 1);
+    // }
+    // encoder.copy_buffer_to_buffer(
+    //     &compute.boids_buffer,
+    //     0,
+    //     &read_buffer,
+    //     0,
+    //     compute.buffer_size,
+    // );
 
-    // Submit the compute pass to the device's queue.
-    window.queue().submit(Some(encoder.finish()));
+    // // Submit the compute pass to the device's queue.
+    // window.queue().submit(Some(encoder.finish()));
 
-    // Spawn a future that reads the result of the compute pass.
-    let future = async move {
-        let slice = read_buffer.slice(..);
-        let (tx, rx) = futures::channel::oneshot::channel();
-        slice.map_async(wgpu::MapMode::Read, |res| {
-            tx.send(res).expect("The channel was closed");
-        });
-        if let Ok(_) = rx.await {
-            let bytes = &slice.get_mapped_range()[..];
-            let boids = {
-                // let len = bytes.len() / std::mem::size_of::<f32>();
-                // let ptr = bytes.as_ptr() as *const f32;
-                // unsafe { std::slice::from_raw_parts(ptr, len) }
-            };
-        }
-    };
-    pollster::block_on(future)
+    // // Spawn a future that reads the result of the compute pass.
+    // let future = async move {
+    //     let slice = read_buffer.slice(..);
+    //     let (tx, rx) = futures::channel::oneshot::channel();
+    //     slice.map_async(wgpu::MapMode::Read, |res| {
+    //         tx.send(res).expect("The channel was closed");
+    //     });
+    //     if let Ok(_) = rx.await {
+    //         let bytes = &slice.get_mapped_range()[..];
+    //         println!("{}", std::str::from_utf8(bytes).unwrap());
+    //         // let boids = {
+    //         // let len = bytes.len() / std::mem::size_of::<f32>();
+    //         // let ptr = bytes.as_ptr() as *const f32;
+    //         // unsafe { std::slice::from_raw_parts(ptr, len) }
+    //         // };
+    //     }
+    // };
+    // pollster::block_on(future);
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
-    let draw = app.draw();
-    draw.background().color(WHITE);
+    // let draw = app.draw();
+    // draw.background().color(WHITE);
 
-    draw.rect()
-        .w(500.0)
-        .h(500.0)
-        .no_fill()
-        .stroke_weight(5.0)
-        .stroke(LIGHTGRAY);
+    // draw.rect()
+    //     .w(500.0)
+    //     .h(500.0)
+    //     .no_fill()
+    //     .stroke_weight(5.0)
+    //     .stroke(LIGHTGRAY);
 
-    model.boids.iter().for_each(|b| {
-        draw.ellipse().x_y(b.x, b.y).radius(2.0).color(BLACK);
-    });
+    // model.boids.iter().for_each(|b| {
+    //     draw.ellipse().x_y(b.x, b.y).radius(2.0).color(BLACK);
+    // });
 
-    draw.to_frame(app, &frame).unwrap();
+    // draw.to_frame(app, &frame).unwrap();
+    // let device = app.main_window().device();
+
+    let mut encoder = frame.command_encoder();
+
+    let mut render_pass = wgpu::RenderPassBuilder::new()
+        .color_attachment(frame.texture_view(), |color| color)
+        .begin(&mut encoder);
+
+    render_pass.set_bind_group(0, &model.render.bind_group, &[]);
+    render_pass.set_pipeline(&model.render.render_pipeline);
+    render_pass.set_vertex_buffer(0, model.render.vertex_buffer.slice(..));
+
+    // Convert the vector of Boids to a slice of Vertex
+    let mut vertices = Vec::with_capacity(NUM_BOIDS);
+    for boid in &model.boids {
+        vertices.push(Vertex {
+            position: [boid.x / 500.0, boid.y / 500.0],
+        });
+    }
+
+    let vertices_slice: &[Vertex] = &vertices[..NUM_BOIDS];
+    let vertex_bytes: &[u8] = unsafe { wgpu::bytes::from_slice(&vertices_slice) };
+
+    app.main_window()
+        .queue()
+        .write_buffer(&model.render.vertex_buffer, 0, &vertex_bytes);
+
+    render_pass.draw(0..NUM_BOIDS as u32, 0..1);
 }
