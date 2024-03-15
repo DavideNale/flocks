@@ -1,8 +1,6 @@
 use bytemuck::{Pod, Zeroable};
-use futures::sink::Buffer;
 use nannou::prelude::*;
 use nannou::wgpu;
-use nannou::wgpu::Device;
 
 struct Model {
     render: Render,
@@ -192,12 +190,11 @@ fn generate_boids_grid(num_boids: usize, _rect: Rect) -> Vec<Boid> {
     boids
 }
 
-fn update(_app: &App, model: &mut Model, update: Update) {
+fn update(_app: &App, model: &mut Model, _update: Update) {
     // update_boids(&mut model.boids, update.since_last.as_secs_f32());
 
     let window = _app.main_window();
     let device = window.device();
-    let compute = &mut model.compute;
 
     let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Staging buffer"),
@@ -209,12 +206,29 @@ fn update(_app: &App, model: &mut Model, update: Update) {
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Compute pass encoder"),
     });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &model.compute.bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: model.compute.boids_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: model.compute.output_buffer.as_entire_binding(),
+            },
+        ],
+    });
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Compute pass descriptor"),
         });
         pass.set_pipeline(&model.compute.compute_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(100, 1, 1);
     }
+
     encoder.copy_buffer_to_buffer(
         &model.compute.output_buffer,
         0,
