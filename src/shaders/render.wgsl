@@ -13,5 +13,5 @@ struct VSOutput {
 }
  
 @fragment fn fs_main(vsOut: VSOutput) -> @location(0) vec4f {
-    return vec4f(1.0, 1.0, 0.0, 1.0); // yellow
+    return vec4f(1.0, 1.0, 1.0, 1.0);
 }

@@ -1,3 +1,5 @@
+use bytemuck::{Pod, Zeroable};
+use futures::sink::Buffer;
 use nannou::prelude::*;
 use nannou::wgpu;
 use nannou::wgpu::Device;
@@ -9,6 +11,7 @@ struct Model {
 }
 
 struct Compute {
+    buffer_size: u64,
     boids_buffer: wgpu::Buffer,
     output_buffer: wgpu::Buffer,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -29,6 +32,8 @@ struct Boid {
     vx: f32,
     vy: f32,
 }
+unsafe impl Pod for Boid {}
+unsafe impl Zeroable for Boid {}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -58,6 +63,8 @@ fn model(app: &App) -> Model {
 
     let cs_module = device.create_shader_module(wgpu::include_wgsl!("shaders/compute.wgsl"));
 
+    let buffer_size: u64 = (NUM_BOIDS * 4 * std::mem::size_of::<f32>()) as u64;
+
     let boids = generate_boids_grid(NUM_BOIDS, app.window_rect());
     let boids_bytes: &[u8] = unsafe { wgpu::bytes::from_slice(&boids[..NUM_BOIDS]) };
 
@@ -72,7 +79,7 @@ fn model(app: &App) -> Model {
     let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Compute output buffer"),
         size: (NUM_BOIDS * 4 * std::mem::size_of::<f32>()) as u64,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
 
@@ -120,6 +127,7 @@ fn model(app: &App) -> Model {
     });
 
     let compute = Compute {
+        buffer_size,
         boids_buffer,
         output_buffer,
         bind_group_layout,
@@ -191,6 +199,13 @@ fn update(_app: &App, model: &mut Model, update: Update) {
     let device = window.device();
     let compute = &mut model.compute;
 
+    let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Staging buffer"),
+        size: model.compute.buffer_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Compute pass encoder"),
     });
@@ -200,6 +215,13 @@ fn update(_app: &App, model: &mut Model, update: Update) {
         });
         pass.set_pipeline(&model.compute.compute_pipeline);
     }
+    encoder.copy_buffer_to_buffer(
+        &model.compute.output_buffer,
+        0,
+        &staging_buffer,
+        0,
+        model.compute.buffer_size,
+    );
 
     let mut data = Vec::with_capacity(NUM_BOIDS);
     for boid in &model.boids {
@@ -213,6 +235,27 @@ fn update(_app: &App, model: &mut Model, update: Update) {
         .write_buffer(&model.compute.boids_buffer, 0, &boids_bytes);
 
     window.queue().submit(Some(encoder.finish()));
+
+    // Async result read
+
+    let future = async move {
+        let staging_slice = staging_buffer.slice(..);
+        let (tx, rx) = flume::bounded(1);
+
+        staging_slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+        device.poll(wgpu::Maintain::Wait);
+
+        if let Ok(Ok(())) = rx.recv_async().await {
+            let data = staging_slice.get_mapped_range();
+            let result: Vec<Boid> = bytemuck::cast_slice(&data).to_vec();
+
+            drop(data);
+
+            staging_buffer.unmap();
+            model.boids = result;
+        }
+    };
+    pollster::block_on(future);
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
