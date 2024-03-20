@@ -88,7 +88,7 @@ fn model(app: &App) -> Model {
                 binding: 0,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
                     has_dynamic_offset: false,
                     min_binding_size: wgpu::BufferSize::new(
                         (NUM_BOIDS * 4 * std::mem::size_of::<f32>()) as u64,
@@ -226,7 +226,7 @@ fn update(_app: &App, model: &mut Model, _update: Update) {
         });
         pass.set_pipeline(&model.compute.compute_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(100, 1, 1);
+        pass.dispatch_workgroups(100, 100, 1);
     }
 
     encoder.copy_buffer_to_buffer(
