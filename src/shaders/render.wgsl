@@ -5,10 +5,12 @@ struct Vertex {
 struct VSOutput {
     @builtin(position) position: vec4f,
 };
+
+@group(0) @binding(0) var<uniform> size: vec2f;
  
 @vertex fn vs_main(vert: Vertex) -> VSOutput {
     var vsOut: VSOutput;
-    vsOut.position = vec4f(vert.position, 0.0, 1.0);
+    vsOut.position = vec4f(vert.position/size, 0.0, 1.0);
     return vsOut;
 }
  

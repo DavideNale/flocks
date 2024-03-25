@@ -3,6 +3,7 @@ use nannou::prelude::*;
 use nannou::wgpu;
 
 struct Model {
+    size: [f32; 2],
     render: Render,
     compute: Compute,
     boids: Vec<Boid>,
@@ -20,6 +21,7 @@ struct Render {
     bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
+    uniform_buffer: wgpu::Buffer,
 }
 
 #[repr(C)]
@@ -43,15 +45,18 @@ fn main() {
     nannou::app(model).update(update).run();
 }
 
-const NUM_BOIDS: usize = 1000;
+const NUM_BOIDS: usize = 4000;
 
 fn model(app: &App) -> Model {
     let w_id = app
         .new_window()
         .size(1000, 1000)
+        .resized(resized)
         .view(view)
         .build()
         .unwrap();
+
+    let size = app.window_rect().wh().to_array();
 
     // wgpu logical device
     let binding = app.window(w_id).unwrap();
@@ -143,8 +148,18 @@ fn model(app: &App) -> Model {
         mapped_at_creation: false,
     });
 
-    let bind_group_layout = wgpu::BindGroupLayoutBuilder::new().build(device);
-    let bind_group = wgpu::BindGroupBuilder::new().build(device, &bind_group_layout);
+    let uniform_buffer = device.create_buffer_init(&wgpu::BufferInitDescriptor {
+        label: Some("Render uniform buffer"),
+        contents: bytemuck::bytes_of(&size),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let bind_group_layout = wgpu::BindGroupLayoutBuilder::new()
+        .uniform_buffer(wgpu::ShaderStages::VERTEX, false)
+        .build(device);
+    let bind_group = wgpu::BindGroupBuilder::new()
+        .buffer_bytes(&uniform_buffer, 0, None)
+        .build(device, &bind_group_layout);
     let pipeline_layout = wgpu::create_pipeline_layout(device, None, &[&bind_group_layout], &[]);
 
     let render_pipeline = wgpu::RenderPipelineBuilder::from_layout(&pipeline_layout, &rn_module)
@@ -161,9 +176,11 @@ fn model(app: &App) -> Model {
         bind_group,
         render_pipeline,
         vertex_buffer,
+        uniform_buffer,
     };
 
     Model {
+        size,
         render,
         compute,
         boids,
@@ -188,6 +205,15 @@ fn generate_boids_grid(num_boids: usize, _rect: Rect) -> Vec<Boid> {
         .collect();
 
     boids
+}
+
+fn resized(app: &App, model: &mut Model, size: Vec2) {
+    model.size = size.to_array();
+    let size_bytes = bytemuck::cast_slice(&model.size);
+    app.main_window()
+        .queue()
+        .write_buffer(&model.render.uniform_buffer, 0, size_bytes);
+    println!("{}", size);
 }
 
 fn update(_app: &App, model: &mut Model, _update: Update) {
@@ -226,7 +252,7 @@ fn update(_app: &App, model: &mut Model, _update: Update) {
         });
         pass.set_pipeline(&model.compute.compute_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(100, 100, 1);
+        pass.dispatch_workgroups(160, 1, 1);
     }
 
     encoder.copy_buffer_to_buffer(
@@ -300,7 +326,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
     let mut vertices = Vec::with_capacity(NUM_BOIDS);
     for boid in &model.boids {
         vertices.push(Vertex {
-            position: [boid.x / 500.0, boid.y / 500.0],
+            position: [boid.x, boid.y],
         });
     }
     let vertices_slice: &[Vertex] = &vertices[..NUM_BOIDS];

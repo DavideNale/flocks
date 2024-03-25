@@ -17,7 +17,7 @@ const speed_min: f32 = 50.0;
 
 
 @compute
-@workgroup_size(16,16,1)
+@workgroup_size(256,1,1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // let index = length(global_id);
     let index = global_id.x + global_id.y + global_id.z;
@@ -89,7 +89,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         new_v = new_v / speed * speed_min;
     }
 
-    curr_p += new_v * 0.05;
+    curr_p += new_v * 0.005;
     // curr_p += curr_v * 16.0;
 
     output[index] = Boid(curr_p, new_v);
